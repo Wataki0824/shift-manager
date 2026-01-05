@@ -15,13 +15,15 @@ import pandas as pd
 from flask import Flask, render_template, request, send_file, jsonify, session, redirect, url_for
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# パスワード設定（環境変数から取得、デフォルトは 'tnc2026'）
-APP_PASSWORD = os.environ.get('APP_PASSWORD', 'tnc2026')
+# パスワード設定（環境変数から取得，デフォルトは 'kitakyushu'）
+APP_PASSWORD = os.environ.get('APP_PASSWORD', 'kitakyushu')
 
 
 def login_required(f):
@@ -245,12 +247,33 @@ def generate_shift_schedule(csv_content: str) -> tuple:
 
 # ===== Flaskルート =====
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        if password == APP_PASSWORD:
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        else:
+            error = 'パスワードが正しくありません'
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout')
+def logout():
+    session.pop('authenticated', None)
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
 
 @app.route('/generate', methods=['POST'])
+@login_required
 def generate():
     try:
         data = request.get_json()
@@ -310,16 +333,63 @@ def generate():
         output = io.BytesIO()
         excel_df.to_excel(output, index=False, header=False, engine='openpyxl')
         output.seek(0)
-        
-        # セル結合処理
+
+        # セル結合処理 & レイアウト調整
         wb = load_workbook(output)
         ws = wb.active
         
+        # フォント設定
+        large_font = Font(size=14)
+        
+        # 全体の行高さを設定
+        for row in ws.iter_rows():
+            ws.row_dimensions[row[0].row].height = 40
+            for cell in row:
+                cell.font = large_font
+            
+        # 列幅の設定
+        # A(日付), B(曜日)を狭く
+        ws.column_dimensions['A'].width = 6
+        ws.column_dimensions['B'].width = 6
+        
         for i, staff in enumerate(staff_columns):
-            start_col = 3 + (i * 2)
-            end_col = start_col + 1
-            ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-            ws.cell(row=1, column=start_col).alignment = Alignment(horizontal='center')
+            start_col_idx = 3 + (i * 2)
+            end_col_idx = start_col_idx + 1
+            
+            y_col_letter = get_column_letter(start_col_idx)     # C, E, G...
+            val_col_letter = get_column_letter(end_col_idx)     # D, F, H...
+            
+            # Yマーク列を狭く
+            ws.column_dimensions[y_col_letter].width = 5
+            
+            # 時間列は少し広めに（見やすくするため）
+            ws.column_dimensions[val_col_letter].width = 10
+            
+            # ヘッダー結合
+            ws.merge_cells(start_row=1, start_column=start_col_idx, end_row=1, end_column=end_col_idx)
+            
+            # スタイル設定
+            # ヘッダー中央揃え
+            header_cell = ws.cell(row=1, column=start_col_idx)
+            header_cell.alignment = Alignment(horizontal='center', vertical='center')
+            header_cell.font = large_font
+            
+            # データ領域のスタイル（中央揃え）
+            for row in range(2, ws.max_row + 1):
+                # Yマーク列
+                cell_y = ws.cell(row=row, column=start_col_idx)
+                cell_y.alignment = Alignment(horizontal='center', vertical='center')
+                cell_y.font = large_font
+                
+                # 時間列
+                cell_val = ws.cell(row=row, column=end_col_idx)
+                cell_val.alignment = Alignment(horizontal='center', vertical='center')
+                cell_val.font = large_font
+        
+        # A, B列も中央揃え
+        for row in range(1, ws.max_row + 1):
+            ws.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
+            ws.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
         
         # 最終的なExcelをメモリに保存
         final_output = io.BytesIO()
@@ -329,10 +399,24 @@ def generate():
         # セッションに保存
         app.config['LAST_EXCEL'] = final_output
         
+        # プレビュー用データを作成
+        preview_data = []
+        for _, row in best_result.iterrows():
+            row_data = {
+                'day': row['日付'],
+                'dayOfWeek': row['曜日'],
+                'staff': {}
+            }
+            for staff in staff_columns:
+                row_data['staff'][staff] = row[staff] if pd.notna(row[staff]) else ''
+            preview_data.append(row_data)
+        
         return jsonify({
             'success': True,
             'attempts': attempts,
-            'y_counts': {k: int(v) for k, v in best_y_counts.items()}
+            'y_counts': {k: int(v) for k, v in best_y_counts.items()},
+            'staffNames': staff_columns,
+            'preview': preview_data
         })
     except Exception as e:
         return jsonify({'error': f'生成エラー: {str(e)}'}), 500

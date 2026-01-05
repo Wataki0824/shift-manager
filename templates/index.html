@@ -101,6 +101,17 @@
                         <div id="yCounts"></div>
                     </div>
 
+                    <!-- プレビューテーブル -->
+                    <div class="preview-section">
+                        <h3>📋 生成結果プレビュー</h3>
+                        <div class="calendar-container">
+                            <table class="calendar-table preview-table" id="previewTable">
+                                <thead id="previewHead"></thead>
+                                <tbody id="previewBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
                     <button id="downloadBtn" class="btn btn-success">
                         📥 Excelをダウンロード
                     </button>
@@ -304,7 +315,61 @@
                 yCountsDiv.appendChild(item);
             }
 
+            // プレビューテーブル生成
+            const previewHead = document.getElementById('previewHead');
+            const previewBody = document.getElementById('previewBody');
+
+            // ヘッダー
+            previewHead.innerHTML = `
+                <tr>
+                    <th>日付</th>
+                    <th>曜日</th>
+                    ${data.staffNames.map(name => `<th colspan="2">${name}</th>`).join('')}
+                </tr>
+            `;
+
+            // ボディ
+            previewBody.innerHTML = '';
+            for (const row of data.preview) {
+                const dayOfWeek = row.dayOfWeek;
+                const isWeekend = dayOfWeek === '土' || dayOfWeek === '日';
+
+                let rowHtml = `
+                    <tr class="${isWeekend ? 'weekend-row' : ''}">
+                        <td class="day-cell">${row.day}</td>
+                        <td class="day-name-cell ${isWeekend ? 'weekend' : ''}">${dayOfWeek}</td>
+                `;
+
+                for (const staffName of data.staffNames) {
+                    const value = row.staff[staffName] || '';
+                    let yMark = '';
+                    let timeValue = value;
+
+                    if (value.startsWith('Y')) {
+                        yMark = 'Y';
+                        timeValue = value.substring(1);
+                    } else if (value === '公' || value === '年') {
+                        yMark = '';
+                        timeValue = value;
+                    }
+
+                    const yClass = yMark ? 'has-y' : '';
+                    const offClass = (value === '公' || value === '年') ? 'is-off' : '';
+
+                    rowHtml += `
+                        <td class="preview-cell ${yClass}">${yMark}</td>
+                        <td class="preview-cell ${offClass}">${timeValue}</td>
+                    `;
+                }
+
+                rowHtml += '</tr>';
+                previewBody.innerHTML += rowHtml;
+            }
+
             resultSection.style.display = 'block';
+
+            // 結果セクションにスクロール
+            resultSection.scrollIntoView({ behavior: 'smooth' });
         }
 
         function showError(message) {

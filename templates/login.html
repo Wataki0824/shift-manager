@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ログイン - 勤務表自動生成</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>📅 勤務表自動生成</h1>
+            <p class="subtitle">ログインしてください</p>
+        </header>
+
+        <main>
+            <section class="form-section login-section">
+                <form method="POST" action="/login" class="login-form">
+                    <div class="form-group">
+                        <label for="password">パスワード</label>
+                        <input type="password" id="password" name="password" class="text-input" required autofocus>
+                    </div>
+
+                    {% if error %}
+                    <div class="error-message">
+                        {{ error }}
+                    </div>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary btn-full">
+                        🔐 ログイン
+                    </button>
+                </form>
+            </section>
+        </main>
+
+        <footer>
+            <p>© 2026 勤務表自動生成ツール</p>
+        </footer>
+    </div>
+</body>
+
+</html>

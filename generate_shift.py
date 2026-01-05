@@ -197,7 +197,7 @@ def parse_shift_value(value: str) -> tuple:
 def convert_to_excel_format(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
     """
     結果DataFrameをExcel出力用の形式に変換する
-    各カメラマンを2列（左:Y、右:時間）に分割
+    各カメラマンを2列（左:Y，右:時間）に分割
     """
     # 新しいDataFrameを作成
     excel_data = []

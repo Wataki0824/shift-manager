@@ -179,7 +179,17 @@ git push -u origin main
    - **Start Command**: `gunicorn app:app`
 5. 「Create Web Service」をクリック
 
-### Step 3: 完了
+### Step 3: 更新する場合
+
+コードを変更したら、GitHubにプッシュするだけでRenderが自動的に更新を行います。
+
+```bash
+git add .
+git commit -m "変更内容のメモ"
+git push
+```
+
+### Step 4: 完了
 
 デプロイ後，以下のようなURLでアクセスできます：
 ```

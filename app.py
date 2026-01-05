@@ -398,6 +398,7 @@ def generate():
         
         # セッションに保存
         app.config['LAST_EXCEL'] = final_output
+        app.config['LAST_FILENAME'] = f'勤務表{year}{int(month):02d}.xlsx'
         
         # プレビュー用データを作成
         preview_data = []
@@ -430,11 +431,13 @@ def download():
     excel_bytes = app.config['LAST_EXCEL']
     excel_bytes.seek(0)
     
+    filename = app.config.get('LAST_FILENAME', 'shift_schedule.xlsx')
+    
     return send_file(
         excel_bytes,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name='shift_schedule.xlsx'
+        download_name=filename
     )
 
 

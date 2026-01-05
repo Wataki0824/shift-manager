@@ -14,9 +14,8 @@ from functools import wraps
 import pandas as pd
 from flask import Flask, render_template, request, send_file, jsonify, session, redirect, url_for
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
@@ -80,9 +79,238 @@ def select_y_candidate(candidates: list, y_counts: dict, prev_day_off: dict) -> 
     return min_y_candidates[0]
 
 
+
+
+
+def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_holidays: dict) -> pd.DataFrame:
+    """不足している公休を自動で埋める（全体最適と連勤考慮）"""
+    result_df = df.copy()
+    
+    # 各スタッフの不足公休数を計算（管理用）
+    missing_counts = {}
+    for staff in staff_columns:
+        current_holidays = result_df[staff].apply(lambda x: 1 if x == '公' else 0).sum()
+        target = target_holidays.get(staff, 0)
+        missing_counts[staff] = max(0, target - current_holidays)
+
+    # ==========================================
+    # Phase 0: 土日出勤の調整（全体最適）
+    # 土日は必ず1人出勤になるように、余剰人員を休ませる。
+    # 「土日休みが少ない人」を優先的に休ませる。
+    # ==========================================
+    
+    # 土日のインデックスを取得
+    weekend_indices = []
+    for idx, row in result_df.iterrows():
+        if is_weekend(row['曜日']):
+            weekend_indices.append(idx)
+    
+    # 完全に解消されるか、公休ストックが尽きるまでループ
+    # （無限ループ防止のため回数制限）
+    for _ in range(100):
+        adjusted_any = False
+        
+        # 土日をシャッフルして順不同にチェック
+        random.shuffle(weekend_indices)
+        
+        for idx in weekend_indices:
+            # この日の出勤者を確認
+            working_staff = []
+            for s in staff_columns:
+                if not is_off(result_df.at[idx, s]):
+                    working_staff.append(s)
+            
+            # 2人以上なら調整が必要
+            if len(working_staff) > 1:
+                # 候補者の中で、実際に公休ストックが残っている人を抽出
+                candidates = [s for s in working_staff if missing_counts[s] > 0]
+                
+                if not candidates:
+                    continue # 誰もこれ以上休めない
+                
+                # --- 優先度判定 ---
+                # 現在の「土日休み回数」が少ない人を優先的に休ませたい
+                # （＝土日出勤が多い人を休ませたい）
+                
+                weekend_off_counts = {}
+                for s in candidates:
+                    # その人の現在の土日休み数
+                    count = 0
+                    for _idx, _row in result_df.iterrows():
+                        if is_weekend(_row['曜日']) and is_off(_row[s]):
+                            count += 1
+                    weekend_off_counts[s] = count
+                
+                # 土日休みが一番少ない人を探す
+                min_off = min(weekend_off_counts.values())
+                target_candidates = [s for s in candidates if weekend_off_counts[s] == min_off]
+                
+                # 同率ならランダムに選ぶ
+                target_staff = random.choice(target_candidates)
+                
+                # 実行
+                result_df.at[idx, target_staff] = '公'
+                missing_counts[target_staff] -= 1
+                adjusted_any = True
+        
+        if not adjusted_any:
+            break
+
+    # ==========================================
+    # Phase 1 & 2: 連勤解消 & 残り埋め（スタッフごと）
+    # ==========================================
+    
+    for staff in staff_columns:
+        missing = missing_counts[staff]
+        if missing <= 0:
+            continue
+            
+        added_count = 0
+        
+        # --- 戦略1: 連勤を解消する箇所を優先的に埋める ---
+        limits_to_check = [6, 5] 
+        
+        for limit in limits_to_check:
+            if added_count >= missing:
+                break
+                
+            while added_count < missing:
+                # 連勤検知
+                consecutive_indices = []
+                current_streak = []
+                for idx, row in result_df.iterrows():
+                    if not is_off(row[staff]):
+                        current_streak.append(idx)
+                    else:
+                        if len(current_streak) > limit:
+                            consecutive_indices.append(current_streak.copy())
+                        current_streak = []
+                if len(current_streak) > limit:
+                     consecutive_indices.append(current_streak.copy())
+                
+                if not consecutive_indices:
+                    break
+                
+                filled_something = False
+                for streak in consecutive_indices:
+                    if added_count >= missing:
+                         break
+                    candidates = streak.copy()
+                    random.shuffle(candidates)
+                    for idx in candidates:
+                        if can_take_off(result_df, idx, staff, staff_columns):
+                            result_df.at[idx, staff] = '公'
+                            added_count += 1
+                            filled_something = True
+                            break 
+                if not filled_something:
+                    break
+
+        # --- 戦略2: まだ足りなければランダムに埋める ---
+        if added_count < missing:
+            candidate_indices = []
+            for idx, row in result_df.iterrows():
+                if not is_off(row[staff]):
+                    candidate_indices.append(idx)
+            
+            random.shuffle(candidate_indices)
+            
+            for idx in candidate_indices:
+                if added_count >= missing:
+                    break
+                if can_take_off(result_df, idx, staff, staff_columns):
+                    result_df.at[idx, staff] = '公'
+                    added_count += 1
+            
+    return result_df
+
+
+def can_take_off(df: pd.DataFrame, idx: int, staff: str, staff_columns: list) -> bool:
+    """指定した日にそのスタッフが休んでも大丈夫かチェック"""
+    day_of_week = df.at[idx, '曜日']
+    is_wknd = is_weekend(day_of_week)
+    
+    # 他の出勤スタッフを確認
+    working_staff = []
+    for s in staff_columns:
+        if s == staff:
+            continue
+        if not is_off(df.at[idx, s]):
+            working_staff.append(s)
+    
+    working_count = len(working_staff)
+    
+    if is_wknd:
+        # 土日は最低1人必要
+        return working_count >= 1
+    else:
+        # 平日は最低1人必要
+        return working_count >= 1
+
+
+
+def optimize_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
+    """生成後のシフトを微調整して最適化する"""
+    # 主に「休み明けのY」を回避するためのスワップを行う
+    result_df = df.copy()
+    
+    for idx, row in result_df.iterrows():
+        day_of_week = row['曜日']
+        if is_weekend(day_of_week):
+            continue # 土日は1人出勤が基本なのでスワップ余地なし
+            
+        # この日の出勤者とシフト情報を取得
+        workers = []
+        for staff in staff_columns:
+            val = result_df.at[idx, staff]
+            if not is_off(val):
+                workers.append({'staff': staff, 'val': val})
+        
+        # 2人以上出勤していないとスワップできない
+        if len(workers) < 2:
+            continue
+            
+        # Yがついている人を探す
+        y_staff_info = None
+        normal_staff_info = None
+        
+        # 平日で「Y付きの人」と「Yなしの人」のペアを探す
+        for w in workers:
+            if 'Y' in w['val']:
+                y_staff_info = w
+            else:
+                normal_staff_info = w # 複数人いる場合、最初に見つかった人を対象にする（簡易実装）
+        
+        if not y_staff_info or not normal_staff_info:
+            continue
+            
+        y_staff = y_staff_info['staff']
+        norm_staff = normal_staff_info['staff']
+        
+        # 前日の状態を確認
+        if idx == 0:
+            continue
+            
+        prev_idx = idx - 1
+        y_staff_prev_off = is_off(result_df.at[prev_idx, y_staff])
+        norm_staff_prev_off = is_off(result_df.at[prev_idx, norm_staff])
+        
+        # 「Y担当が前日休み」かつ「通常担当が前日出勤」の場合、入れ替えるべき
+        if y_staff_prev_off and not norm_staff_prev_off:
+            # スワップ実行
+            val_y = y_staff_info['val']
+            val_norm = normal_staff_info['val']
+            
+            result_df.at[idx, y_staff] = val_norm
+            result_df.at[idx, norm_staff] = val_y
+
+    return result_df
+
+
 def assign_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
     """勤務表を自動生成する"""
     result_df = df.copy()
+
     y_counts = {staff: 0 for staff in staff_columns}
     prev_day_off = {staff: False for staff in staff_columns}
     
@@ -136,6 +364,9 @@ def assign_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
         
         for staff in staff_columns:
             prev_day_off[staff] = is_off(row[staff])
+    
+    # 最適化（スワップ）実行
+    result_df = optimize_shifts(result_df, staff_columns)
     
     return result_df
 
@@ -285,19 +516,30 @@ def generate():
         month = data.get('month')
         staff_names = data.get('staffNames', ['A', 'B', 'C'])
         schedule = data.get('schedule', [])
+        target_holidays = data.get('targetHolidays', {})
         
         if not schedule:
             return jsonify({'error': 'スケジュールデータがありません'}), 400
         
-        # DataFrameを構築
+        # DataFrameを構築 & 希望休マスクを作成
         rows = []
-        for day_data in schedule:
+        request_mask = {} # (day_index, staff_name) -> bool
+        
+        for day_idx, day_data in enumerate(schedule):
             row = {
                 '日付': day_data['day'],
                 '曜日': day_data['dayOfWeek']
             }
             for staff_name in staff_names:
-                row[staff_name] = day_data['staff'].get(staff_name, '')
+                val = day_data['staff'].get(staff_name, '')
+                row[staff_name] = val
+                
+                # 公 または 年 が入力されている場合は希望休としてマーク
+                if val in ['公', '年']:
+                    request_mask[(day_idx, staff_name)] = True
+                else:
+                    request_mask[(day_idx, staff_name)] = False
+                    
             rows.append(row)
         
         df = pd.DataFrame(rows)
@@ -313,7 +555,11 @@ def generate():
         
         for attempt in range(max_attempts):
             attempts = attempt + 1
-            result_df = assign_shifts(df.copy(), staff_columns)
+            
+            # 公休の自動充填
+            df_with_holidays = fill_missing_public_holidays(df.copy(), staff_columns, target_holidays)
+            
+            result_df = assign_shifts(df_with_holidays, staff_columns)
             y_counts = get_y_counts(result_df, staff_columns)
             counts = list(y_counts.values())
             diff = max(counts) - min(counts)
@@ -338,8 +584,10 @@ def generate():
         wb = load_workbook(output)
         ws = wb.active
         
-        # フォント設定
+        # フォント・スタイル設定
         large_font = Font(size=14)
+        bold_font = Font(size=14, bold=True)
+        gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
         
         # 全体の行高さを設定
         for row in ws.iter_rows():
@@ -348,7 +596,6 @@ def generate():
                 cell.font = large_font
             
         # 列幅の設定
-        # A(日付), B(曜日)を狭く
         ws.column_dimensions['A'].width = 6
         ws.column_dimensions['B'].width = 6
         
@@ -362,7 +609,7 @@ def generate():
             # Yマーク列を狭く
             ws.column_dimensions[y_col_letter].width = 5
             
-            # 時間列は少し広めに（見やすくするため）
+            # 時間列は少し広めに
             ws.column_dimensions[val_col_letter].width = 10
             
             # ヘッダー結合
@@ -374,17 +621,27 @@ def generate():
             header_cell.alignment = Alignment(horizontal='center', vertical='center')
             header_cell.font = large_font
             
-            # データ領域のスタイル（中央揃え）
-            for row in range(2, ws.max_row + 1):
+            # データ領域のスタイル（中央揃え & 希望休ハイライト）
+            for row_idx, row in enumerate(range(2, ws.max_row + 1)):
+                # row_idx は 0始まり (DataFrameの行インデックスと一致)
+                
                 # Yマーク列
                 cell_y = ws.cell(row=row, column=start_col_idx)
                 cell_y.alignment = Alignment(horizontal='center', vertical='center')
                 cell_y.font = large_font
                 
-                # 時間列
+                # 時間列 / 休み列（ここに公/年が入る）
                 cell_val = ws.cell(row=row, column=end_col_idx)
                 cell_val.alignment = Alignment(horizontal='center', vertical='center')
                 cell_val.font = large_font
+                
+                # 希望休かどうかのチェック
+                # 公や年の場合、セルに値が入っているはず
+                # request_mask[(row_idx, staff)] が True ならスタイル適用
+                if request_mask.get((row_idx, staff), False):
+                     # 時間列（休み文字が入っている方）を強調
+                     cell_val.font = bold_font
+                     cell_val.fill = gray_fill
         
         # A, B列も中央揃え
         for row in range(1, ws.max_row + 1):
@@ -402,14 +659,19 @@ def generate():
         
         # プレビュー用データを作成
         preview_data = []
-        for _, row in best_result.iterrows():
+        for idx, (_, row) in enumerate(best_result.iterrows()):
             row_data = {
                 'day': row['日付'],
                 'dayOfWeek': row['曜日'],
                 'staff': {}
             }
             for staff in staff_columns:
-                row_data['staff'][staff] = row[staff] if pd.notna(row[staff]) else ''
+                val = row[staff] if pd.notna(row[staff]) else ''
+                is_request = request_mask.get((idx, staff), False)
+                row_data['staff'][staff] = {
+                    'value': val,
+                    'isRequest': is_request
+                }
             preview_data.append(row_data)
         
         return jsonify({

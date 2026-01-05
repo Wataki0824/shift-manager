@@ -44,19 +44,31 @@
 
             <!-- Step 2: カメラマン名入力 -->
             <section class="form-section">
-                <h2 class="section-title">2. カメラマン名を入力</h2>
+                <h2 class="section-title">2. カメラマン名と目標公休数を入力</h2>
                 <div class="staff-inputs">
                     <div class="staff-input-row">
                         <label>カメラマン1:</label>
                         <input type="text" id="staff1" class="text-input" value="A" placeholder="名前">
+                        <div class="holiday-select-wrapper">
+                            <label class="holiday-label">公休数:</label>
+                            <select id="staff1Holidays" class="select-input holiday-select"></select>
+                        </div>
                     </div>
                     <div class="staff-input-row">
                         <label>カメラマン2:</label>
                         <input type="text" id="staff2" class="text-input" value="B" placeholder="名前">
+                        <div class="holiday-select-wrapper">
+                            <label class="holiday-label">公休数:</label>
+                            <select id="staff2Holidays" class="select-input holiday-select"></select>
+                        </div>
                     </div>
                     <div class="staff-input-row">
                         <label>カメラマン3:</label>
                         <input type="text" id="staff3" class="text-input" value="C" placeholder="名前">
+                        <div class="holiday-select-wrapper">
+                            <label class="holiday-label">公休数:</label>
+                            <select id="staff3Holidays" class="select-input holiday-select"></select>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -188,7 +200,7 @@
             document.getElementById('staffHeader3').textContent = staff3Input.value || 'C';
         }
 
-        // カレンダー生成
+        // カレンダー生成 & 公休数更新
         function generateCalendar() {
             const year = parseInt(yearSelect.value);
             const month = parseInt(monthSelect.value);
@@ -196,11 +208,15 @@
 
             calendarBody.innerHTML = '';
 
+            let weekendCount = 0;
+
             for (let day = 1; day <= daysInMonth; day++) {
                 const date = new Date(year, month - 1, day);
                 const dayOfWeek = date.getDay();
                 const dayName = DAY_NAMES[dayOfWeek];
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                if (isWeekend) weekendCount++;
 
                 const row = document.createElement('tr');
                 if (isWeekend) row.classList.add('weekend-row');
@@ -230,6 +246,43 @@
                     if (OFF_TYPES[index] === '年') cell.classList.add('off-annual');
                 });
             });
+
+            // 公休数の選択肢を更新
+            updateHolidaySelects(weekendCount);
+        }
+
+        // 公休数選択肢の更新
+        function updateHolidaySelects(weekendCount) {
+            const minHolidays = Math.max(0, weekendCount - 8);
+            const maxHolidays = weekendCount + 8;
+
+            const selects = [
+                document.getElementById('staff1Holidays'),
+                document.getElementById('staff2Holidays'),
+                document.getElementById('staff3Holidays')
+            ];
+
+            selects.forEach(select => {
+                // 現在の選択値を保持
+                const currentValue = select.value;
+                select.innerHTML = '';
+
+                for (let i = minHolidays; i <= maxHolidays; i++) {
+                    const option = document.createElement('option');
+                    option.value = i;
+                    option.textContent = `${i}日`;
+                    if (i === weekendCount) {
+                        option.selected = true; // デフォルトは基準値
+                        option.textContent += ' (基準)';
+                    }
+                    select.appendChild(option);
+                }
+
+                // もし以前の値が範囲内にあれば復元
+                if (currentValue && currentValue >= minHolidays && currentValue <= maxHolidays) {
+                    select.value = currentValue;
+                }
+            });
         }
 
         // 入力データを収集
@@ -241,6 +294,11 @@
                 staff2Input.value || 'B',
                 staff3Input.value || 'C'
             ];
+
+            const targetHolidays = {};
+            targetHolidays[staffNames[0]] = parseInt(document.getElementById('staff1Holidays').value);
+            targetHolidays[staffNames[1]] = parseInt(document.getElementById('staff2Holidays').value);
+            targetHolidays[staffNames[2]] = parseInt(document.getElementById('staff3Holidays').value);
 
             const daysInMonth = new Date(year, month, 0).getDate();
             const scheduleData = [];
@@ -267,6 +325,7 @@
                 year: year,
                 month: month,
                 staffNames: staffNames,
+                targetHolidays: targetHolidays,
                 schedule: scheduleData
             };
         }
@@ -303,9 +362,6 @@
         });
 
         function showResult(data) {
-            document.getElementById('attempts').textContent =
-                `${data.attempts}回目の試行で均等な分配を達成`;
-
             const yCountsDiv = document.getElementById('yCounts');
             yCountsDiv.innerHTML = '';
             for (const [name, count] of Object.entries(data.y_counts)) {
@@ -341,7 +397,10 @@
                 `;
 
                 for (const staffName of data.staffNames) {
-                    const value = row.staff[staffName] || '';
+                    const staffData = row.staff[staffName] || { value: '', isRequest: false };
+                    const value = staffData.value;
+                    const isRequest = staffData.isRequest;
+
                     let yMark = '';
                     let timeValue = value;
 
@@ -355,10 +414,11 @@
 
                     const yClass = yMark ? 'has-y' : '';
                     const offClass = (value === '公' || value === '年') ? 'is-off' : '';
+                    const requestClass = isRequest ? 'request-off' : '';
 
                     rowHtml += `
                         <td class="preview-cell ${yClass}">${yMark}</td>
-                        <td class="preview-cell ${offClass}">${timeValue}</td>
+                        <td class="preview-cell ${offClass} ${requestClass}">${timeValue}</td>
                     `;
                 }
 

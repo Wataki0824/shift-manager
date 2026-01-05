@@ -430,6 +430,26 @@ footer {
     font-weight: 600;
 }
 
+/* ===== Staff Inputs ===== */
+.holiday-select-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: 0.5rem;
+}
+
+.holiday-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.holiday-select {
+    padding: 0.5rem;
+    font-size: 0.95rem;
+    width: 100px;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 480px) {
     header h1 {
@@ -449,10 +469,23 @@ footer {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.5rem;
+        background: rgba(255, 255, 255, 0.05);
+        padding: 1rem;
+        border-radius: 8px;
     }
 
     .staff-input-row label {
         width: auto;
+    }
+
+    .holiday-select-wrapper {
+        margin-left: 0;
+        margin-top: 0.5rem;
+        width: 100%;
+    }
+
+    .holiday-select {
+        flex: 1;
     }
 
     .text-input {

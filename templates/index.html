@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>勤務表自動生成</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>📅 勤務表自動生成</h1>
+            <p class="subtitle">年月・カメラマン・休みを入力して勤務表を自動生成</p>
+        </header>
+
+        <main>
+            <!-- Step 1: 年月選択 -->
+            <section class="form-section">
+                <h2 class="section-title">1. 年月を選択</h2>
+                <div class="date-selector">
+                    <select id="yearSelect" class="select-input">
+                        <!-- JSで生成 -->
+                    </select>
+                    <span class="date-separator">年</span>
+                    <select id="monthSelect" class="select-input">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                        <option value="9">9</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                        <option value="12">12</option>
+                    </select>
+                    <span class="date-separator">月</span>
+                </div>
+            </section>
+
+            <!-- Step 2: カメラマン名入力 -->
+            <section class="form-section">
+                <h2 class="section-title">2. カメラマン名を入力</h2>
+                <div class="staff-inputs">
+                    <div class="staff-input-row">
+                        <label>カメラマン1:</label>
+                        <input type="text" id="staff1" class="text-input" value="A" placeholder="名前">
+                    </div>
+                    <div class="staff-input-row">
+                        <label>カメラマン2:</label>
+                        <input type="text" id="staff2" class="text-input" value="B" placeholder="名前">
+                    </div>
+                    <div class="staff-input-row">
+                        <label>カメラマン3:</label>
+                        <input type="text" id="staff3" class="text-input" value="C" placeholder="名前">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 3: 休み入力カレンダー -->
+            <section class="form-section">
+                <h2 class="section-title">3. 休みを選択</h2>
+                <p class="help-text">各日のセルをクリックして休みのタイプを選択（空欄→公→年→空欄...）</p>
+                <div class="calendar-container">
+                    <table class="calendar-table" id="calendarTable">
+                        <thead>
+                            <tr>
+                                <th>日付</th>
+                                <th>曜日</th>
+                                <th id="staffHeader1">A</th>
+                                <th id="staffHeader2">B</th>
+                                <th id="staffHeader3">C</th>
+                            </tr>
+                        </thead>
+                        <tbody id="calendarBody">
+                            <!-- JSで生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 生成ボタン -->
+            <section class="action-section">
+                <button id="generateBtn" class="btn btn-primary">
+                    🚀 勤務表を生成
+                </button>
+            </section>
+
+            <!-- 結果表示 -->
+            <section class="result-section" id="resultSection" style="display: none;">
+                <div class="result-card">
+                    <h2>✅ 生成完了</h2>
+                    <p class="attempts" id="attempts"></p>
+
+                    <div class="y-counts">
+                        <h3>呼び出し（Y）集計</h3>
+                        <div id="yCounts"></div>
+                    </div>
+
+                    <button id="downloadBtn" class="btn btn-success">
+                        📥 Excelをダウンロード
+                    </button>
+                </div>
+            </section>
+
+            <!-- エラー表示 -->
+            <section class="error-section" id="errorSection" style="display: none;">
+                <div class="error-card">
+                    <h2>❌ エラー</h2>
+                    <p id="errorMessage"></p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>© 2026 勤務表自動生成ツール</p>
+        </footer>
+    </div>
+
+    <!-- ローディング -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>生成中...</p>
+    </div>
+
+    <script>
+        const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+        const OFF_TYPES = ['', '公', '年'];
+
+        // 要素取得
+        const yearSelect = document.getElementById('yearSelect');
+        const monthSelect = document.getElementById('monthSelect');
+        const staff1Input = document.getElementById('staff1');
+        const staff2Input = document.getElementById('staff2');
+        const staff3Input = document.getElementById('staff3');
+        const calendarBody = document.getElementById('calendarBody');
+        const generateBtn = document.getElementById('generateBtn');
+        const resultSection = document.getElementById('resultSection');
+        const errorSection = document.getElementById('errorSection');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        // 初期化
+        function init() {
+            // 年の選択肢を生成
+            const currentYear = new Date().getFullYear();
+            for (let y = currentYear - 3; y <= currentYear + 3; y++) {
+                const option = document.createElement('option');
+                option.value = y;
+                option.textContent = y;
+                if (y === currentYear) option.selected = true;
+                yearSelect.appendChild(option);
+            }
+
+            // 現在の月を選択
+            const currentMonth = new Date().getMonth() + 1;
+            monthSelect.value = currentMonth;
+
+            // カレンダー生成
+            generateCalendar();
+
+            // イベントリスナー
+            yearSelect.addEventListener('change', generateCalendar);
+            monthSelect.addEventListener('change', generateCalendar);
+            staff1Input.addEventListener('input', updateStaffHeaders);
+            staff2Input.addEventListener('input', updateStaffHeaders);
+            staff3Input.addEventListener('input', updateStaffHeaders);
+        }
+
+        // カメラマンヘッダー更新
+        function updateStaffHeaders() {
+            document.getElementById('staffHeader1').textContent = staff1Input.value || 'A';
+            document.getElementById('staffHeader2').textContent = staff2Input.value || 'B';
+            document.getElementById('staffHeader3').textContent = staff3Input.value || 'C';
+        }
+
+        // カレンダー生成
+        function generateCalendar() {
+            const year = parseInt(yearSelect.value);
+            const month = parseInt(monthSelect.value);
+            const daysInMonth = new Date(year, month, 0).getDate();
+
+            calendarBody.innerHTML = '';
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month - 1, day);
+                const dayOfWeek = date.getDay();
+                const dayName = DAY_NAMES[dayOfWeek];
+                const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                const row = document.createElement('tr');
+                if (isWeekend) row.classList.add('weekend-row');
+
+                row.innerHTML = `
+                    <td class="day-cell">${day}</td>
+                    <td class="day-name-cell ${isWeekend ? 'weekend' : ''}">${dayName}</td>
+                    <td class="off-cell" data-day="${day}" data-staff="1" data-off-index="0"></td>
+                    <td class="off-cell" data-day="${day}" data-staff="2" data-off-index="0"></td>
+                    <td class="off-cell" data-day="${day}" data-staff="3" data-off-index="0"></td>
+                `;
+
+                calendarBody.appendChild(row);
+            }
+
+            // セルクリックイベント
+            document.querySelectorAll('.off-cell').forEach(cell => {
+                cell.addEventListener('click', () => {
+                    let index = parseInt(cell.dataset.offIndex);
+                    index = (index + 1) % OFF_TYPES.length;
+                    cell.dataset.offIndex = index;
+                    cell.textContent = OFF_TYPES[index];
+
+                    // スタイル更新
+                    cell.classList.remove('off-public', 'off-annual');
+                    if (OFF_TYPES[index] === '公') cell.classList.add('off-public');
+                    if (OFF_TYPES[index] === '年') cell.classList.add('off-annual');
+                });
+            });
+        }
+
+        // 入力データを収集
+        function collectInputData() {
+            const year = parseInt(yearSelect.value);
+            const month = parseInt(monthSelect.value);
+            const staffNames = [
+                staff1Input.value || 'A',
+                staff2Input.value || 'B',
+                staff3Input.value || 'C'
+            ];
+
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const scheduleData = [];
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month - 1, day);
+                const dayName = DAY_NAMES[date.getDay()];
+
+                const dayData = {
+                    day: day,
+                    dayOfWeek: dayName,
+                    staff: {}
+                };
+
+                for (let s = 1; s <= 3; s++) {
+                    const cell = document.querySelector(`.off-cell[data-day="${day}"][data-staff="${s}"]`);
+                    dayData.staff[staffNames[s - 1]] = cell.textContent;
+                }
+
+                scheduleData.push(dayData);
+            }
+
+            return {
+                year: year,
+                month: month,
+                staffNames: staffNames,
+                schedule: scheduleData
+            };
+        }
+
+        // 生成ボタン
+        generateBtn.addEventListener('click', async () => {
+            loadingOverlay.style.display = 'flex';
+            resultSection.style.display = 'none';
+            errorSection.style.display = 'none';
+
+            const inputData = collectInputData();
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(inputData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showResult(data);
+                } else {
+                    showError(data.error);
+                }
+            } catch (error) {
+                showError('通信エラーが発生しました');
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+
+        function showResult(data) {
+            document.getElementById('attempts').textContent =
+                `${data.attempts}回目の試行で均等な分配を達成`;
+
+            const yCountsDiv = document.getElementById('yCounts');
+            yCountsDiv.innerHTML = '';
+            for (const [name, count] of Object.entries(data.y_counts)) {
+                const item = document.createElement('div');
+                item.className = 'y-count-item';
+                item.innerHTML = `<span class="name">${name}</span><span class="count">${count}回</span>`;
+                yCountsDiv.appendChild(item);
+            }
+
+            resultSection.style.display = 'block';
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            errorSection.style.display = 'block';
+        }
+
+        // ダウンロード
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            window.location.href = '/download';
+        });
+
+        // 初期化実行
+        init();
+    </script>
+</body>
+
+</html>

@@ -273,7 +273,6 @@
                     option.textContent = `${i}日`;
                     if (i === weekendCount) {
                         option.selected = true; // デフォルトは基準値
-                        option.textContent += ' (基準)';
                     }
                     select.appendChild(option);
                 }
@@ -362,6 +361,11 @@
         });
 
         function showResult(data) {
+            // ファイル名を保存
+            if (data.filename) {
+                resultSection.dataset.filename = data.filename;
+            }
+
             const yCountsDiv = document.getElementById('yCounts');
             yCountsDiv.innerHTML = '';
             for (const [name, count] of Object.entries(data.y_counts)) {
@@ -417,8 +421,8 @@
                     const requestClass = isRequest ? 'request-off' : '';
 
                     rowHtml += `
-                        <td class="preview-cell ${yClass}">${yMark}</td>
-                        <td class="preview-cell ${offClass} ${requestClass}">${timeValue}</td>
+                        <td class="preview-cell ${yClass} editable-cell y-column-cell" onclick="toggleY(this)">${yMark}</td>
+                        <td class="preview-cell ${offClass} ${requestClass} editable-cell" onclick="editTime(this)" data-original-request="${isRequest}">${timeValue}</td>
                     `;
                 }
 
@@ -432,14 +436,167 @@
             resultSection.scrollIntoView({ behavior: 'smooth' });
         }
 
+        // --- 編集機能 ---
+
+        function toggleY(td) {
+            if (td.textContent.trim() === 'Y') {
+                td.textContent = '';
+                td.classList.remove('has-y');
+            } else {
+                td.textContent = 'Y';
+                td.classList.add('has-y');
+            }
+        }
+
+        function editTime(td) {
+            // すでに編集モードなら何もしない
+            if (td.querySelector('select')) return;
+
+            const currentValue = td.textContent.trim();
+            td.innerHTML = '';
+
+            const select = document.createElement('select');
+            select.className = 'edit-select';
+
+            const options = ['9', '10', '公', '年'];
+            // もし現在の値が上記以外なら（例: 空欄など）、それも追加するか、デフォルト9にするか
+            if (!options.includes(currentValue) && currentValue !== '') {
+                options.push(currentValue);
+            }
+
+            for (const opt of options) {
+                const option = document.createElement('option');
+                option.value = opt;
+                option.textContent = opt;
+                if (opt === currentValue) option.selected = true;
+                select.appendChild(option);
+            }
+
+            // フォーカスが外れたら確定
+            select.addEventListener('blur', () => confirmEdit(td, select));
+            // 変更時にも確定する場合はここ（今回はblurだけでいいかもだが、使い勝手的にEnter対応等が望ましい）
+            select.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') select.blur();
+            });
+
+            td.appendChild(select);
+            select.focus();
+        }
+
+        function confirmEdit(td, select) {
+            const newValue = select.value;
+            td.textContent = newValue;
+
+            // クラス更新
+            td.classList.remove('is-off', 'request-off'); // request-offも一旦外す（編集した時点で手動オーバーライドとみなす）
+
+            if (newValue === '公' || newValue === '年') {
+                td.classList.add('is-off');
+                // 元々が希望休だった場合は、公/年を選んでいる限りrequest-offを維持したい場合もあるが
+                // ここでは「編集後のスタイル」として、シンプルに is-off のみを適用（赤字）。
+                // もし灰色にしたいならここで request-off を足せば良いが、
+                // 「手動で公にした」ことを明確にするなら色を変えるのも手。
+                // ユーザー要望「公を入力するセルだけ灰色」に従うなら：
+                if (newValue === '公') {
+                    td.classList.add('request-off'); // 公を選んだら灰色にする
+                }
+            }
+
+            // 年の場合は？要望は「公を入力するセル」なので、年については言及なし。
+            // 既存ロジックでは isRequest=true なら灰色。公も年も。
+            // ここではシンプルに「公」なら灰色をつけておく。
+        }
+
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             errorSection.style.display = 'block';
         }
 
-        // ダウンロード
-        document.getElementById('downloadBtn').addEventListener('click', () => {
-            window.location.href = '/download';
+        // ダウンロード（編集内容を反映してダウンロード）
+        document.getElementById('downloadBtn').addEventListener('click', async () => {
+            const table = document.querySelector('.preview-table');
+            if (!table) return;
+
+            const staffNames = Array.from(table.querySelectorAll('thead th')).slice(2).map(th => th.textContent);
+            const rows = [];
+            const trs = table.querySelectorAll('tbody tr');
+
+            for (const tr of trs) {
+                const day = tr.querySelector('.day-cell').textContent;
+                const dayOfWeek = tr.querySelector('.day-name-cell').textContent;
+                const staffData = {};
+
+                // スタッフのセルは2つずつ (3番目以降のtd)
+                const cells = Array.from(tr.querySelectorAll('.preview-cell'));
+
+                for (let i = 0; i < staffNames.length; i++) {
+                    const yCell = cells[i * 2];
+                    const valCell = cells[i * 2 + 1];
+
+                    const yVal = yCell.textContent.trim(); // 'Y' or ''
+                    const timeVal = valCell.textContent.trim(); // '9', '10', '公' etc
+
+                    // 結合してバックエンドに送る形式にする ('Y9', '10', '公' など)
+                    let fullVal = '';
+                    if (timeVal === '公' || timeVal === '年') {
+                        fullVal = timeVal;
+                    } else {
+                        // 出勤
+                        fullVal = yVal + timeVal;
+                    }
+
+                    // isRequestの判定
+                    // originalRequestがtrueで、かつ値が公/年（つまり休み）の場合のみ維持
+                    // 出勤に変更したならrequestじゃない
+                    const originalRequest = valCell.dataset.originalRequest === 'true';
+                    let isRequest = originalRequest;
+
+                    if (timeVal !== '公' && timeVal !== '年') {
+                        isRequest = false;
+                    }
+
+                    staffData[staffNames[i]] = {
+                        value: fullVal,
+                        isRequest: isRequest
+                    };
+                }
+
+                rows.push({
+                    day: day,
+                    dayOfWeek: dayOfWeek,
+                    staff: staffData
+                });
+            }
+
+            // サーバーに送信
+            try {
+                const response = await fetch('/download_edited', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        rows: rows,
+                        staffNames: staffNames,
+                        filename: document.getElementById('resultSection').dataset.filename || 'schedule.xlsx'
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('ダウンロード生成に失敗しました');
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = document.getElementById('resultSection').dataset.filename || '勤務表.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+            } catch (err) {
+                alert(err.message);
+            }
         });
 
         // 初期化実行

@@ -244,8 +244,8 @@ def can_take_off(df: pd.DataFrame, idx: int, staff: str, staff_columns: list) ->
         # 土日は最低1人必要
         return working_count >= 1
     else:
-        # 平日は最低1人必要
-        return working_count >= 1
+        # 平日は最低2人必要（1人出勤はNG）
+        return working_count >= 2
 
 
 
@@ -572,86 +572,11 @@ def generate():
             if is_balanced(y_counts):
                 break
         
-        # Excel形式に変換
-        excel_df = convert_to_excel_format(best_result, staff_columns)
+            if is_balanced(y_counts):
+                break
         
-        # Excelファイルをメモリに書き込み
-        output = io.BytesIO()
-        excel_df.to_excel(output, index=False, header=False, engine='openpyxl')
-        output.seek(0)
-
-        # セル結合処理 & レイアウト調整
-        wb = load_workbook(output)
-        ws = wb.active
-        
-        # フォント・スタイル設定
-        large_font = Font(size=14)
-        bold_font = Font(size=14, bold=True)
-        gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
-        
-        # 全体の行高さを設定
-        for row in ws.iter_rows():
-            ws.row_dimensions[row[0].row].height = 40
-            for cell in row:
-                cell.font = large_font
-            
-        # 列幅の設定
-        ws.column_dimensions['A'].width = 6
-        ws.column_dimensions['B'].width = 6
-        
-        for i, staff in enumerate(staff_columns):
-            start_col_idx = 3 + (i * 2)
-            end_col_idx = start_col_idx + 1
-            
-            y_col_letter = get_column_letter(start_col_idx)     # C, E, G...
-            val_col_letter = get_column_letter(end_col_idx)     # D, F, H...
-            
-            # Yマーク列を狭く
-            ws.column_dimensions[y_col_letter].width = 5
-            
-            # 時間列は少し広めに
-            ws.column_dimensions[val_col_letter].width = 10
-            
-            # ヘッダー結合
-            ws.merge_cells(start_row=1, start_column=start_col_idx, end_row=1, end_column=end_col_idx)
-            
-            # スタイル設定
-            # ヘッダー中央揃え
-            header_cell = ws.cell(row=1, column=start_col_idx)
-            header_cell.alignment = Alignment(horizontal='center', vertical='center')
-            header_cell.font = large_font
-            
-            # データ領域のスタイル（中央揃え & 希望休ハイライト）
-            for row_idx, row in enumerate(range(2, ws.max_row + 1)):
-                # row_idx は 0始まり (DataFrameの行インデックスと一致)
-                
-                # Yマーク列
-                cell_y = ws.cell(row=row, column=start_col_idx)
-                cell_y.alignment = Alignment(horizontal='center', vertical='center')
-                cell_y.font = large_font
-                
-                # 時間列 / 休み列（ここに公/年が入る）
-                cell_val = ws.cell(row=row, column=end_col_idx)
-                cell_val.alignment = Alignment(horizontal='center', vertical='center')
-                cell_val.font = large_font
-                
-                # 希望休かどうかのチェック
-                # 公や年の場合、セルに値が入っているはず
-                # request_mask[(row_idx, staff)] が True ならスタイル適用
-                if request_mask.get((row_idx, staff), False):
-                     # 時間列（休み文字が入っている方）を強調
-                     cell_val.font = bold_font
-                     cell_val.fill = gray_fill
-        
-        # A, B列も中央揃え
-        for row in range(1, ws.max_row + 1):
-            ws.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
-            ws.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
-        
-        # 最終的なExcelをメモリに保存
-        final_output = io.BytesIO()
-        wb.save(final_output)
-        final_output.seek(0)
+        # Excel形式に変換 & スタイル適用
+        final_output = create_styled_excel(best_result, staff_columns, request_mask)
         
         # セッションに保存
         app.config['LAST_EXCEL'] = final_output
@@ -679,14 +604,107 @@ def generate():
             'attempts': attempts,
             'y_counts': {k: int(v) for k, v in best_y_counts.items()},
             'staffNames': staff_columns,
-            'preview': preview_data
+            'preview': preview_data,
+            'filename': f'勤務表{year}{int(month):02d}.xlsx'
         })
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'生成エラー: {str(e)}'}), 500
+
+
+def create_styled_excel(df: pd.DataFrame, staff_columns: list, request_mask: dict = None) -> io.BytesIO:
+    """DataFrameからスタイル付きExcelファイルを生成する共通関数"""
+    
+    # Excel形式に変換
+    excel_df = convert_to_excel_format(df, staff_columns)
+    
+    # Excelファイルをメモリに書き込み
+    output = io.BytesIO()
+    excel_df.to_excel(output, index=False, header=False, engine='openpyxl')
+    output.seek(0)
+
+    # セル結合処理 & レイアウト調整
+    wb = load_workbook(output)
+    ws = wb.active
+    
+    # フォント・スタイル設定
+    large_font = Font(size=14)
+    bold_font = Font(size=14, bold=True)
+    gray_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+    
+    # 全体の行高さを設定
+    for row in ws.iter_rows():
+        ws.row_dimensions[row[0].row].height = 40
+        for cell in row:
+            cell.font = large_font
+        
+    # 列幅の設定
+    ws.column_dimensions['A'].width = 6
+    ws.column_dimensions['B'].width = 6
+    
+    for i, staff in enumerate(staff_columns):
+        start_col_idx = 3 + (i * 2)
+        end_col_idx = start_col_idx + 1
+        
+        y_col_letter = get_column_letter(start_col_idx)     # C, E, G...
+        val_col_letter = get_column_letter(end_col_idx)     # D, F, H...
+        
+        # Yマーク列を狭く
+        ws.column_dimensions[y_col_letter].width = 5
+        
+        # 時間列は少し広めに
+        ws.column_dimensions[val_col_letter].width = 10
+        
+        # ヘッダー結合
+        ws.merge_cells(start_row=1, start_column=start_col_idx, end_row=1, end_column=end_col_idx)
+        
+        # スタイル設定
+        # ヘッダー中央揃え
+        header_cell = ws.cell(row=1, column=start_col_idx)
+        header_cell.alignment = Alignment(horizontal='center', vertical='center')
+        header_cell.font = large_font
+        
+        # データ領域のスタイル
+        for row_idx, row in enumerate(range(2, ws.max_row + 1)):
+            # row_idx は 0始まり (DataFrameの行インデックスと一致)
+            
+            # Yマーク列
+            cell_y = ws.cell(row=row, column=start_col_idx)
+            cell_y.alignment = Alignment(horizontal='center', vertical='center')
+            cell_y.font = large_font
+            
+            # 時間列 / 休み列
+            cell_val = ws.cell(row=row, column=end_col_idx)
+            cell_val.alignment = Alignment(horizontal='center', vertical='center')
+            cell_val.font = large_font
+            
+            # 希望休ハイライト (request_maskが指定されている場合のみ)
+            if request_mask:
+                # request_maskのキーは (row_idx, staff_name)
+                # キー判定のために staff名が必要
+                # staff_columns[i] が現在のスタッフ名
+                
+                if request_mask.get((row_idx, staff), False):
+                     cell_val.font = bold_font
+                     cell_val.fill = gray_fill
+    
+    # A, B列も中央揃え
+    for row in range(1, ws.max_row + 1):
+        ws.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
+        ws.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
+    
+    # 最終的なExcelをメモリに保存
+    final_output = io.BytesIO()
+    wb.save(final_output)
+    final_output.seek(0)
+    
+    return final_output
 
 
 @app.route('/download')
 def download():
+    # 後方互換性のため残すが、基本はdownload_editedを使う想定
     if 'LAST_EXCEL' not in app.config or app.config['LAST_EXCEL'] is None:
         return jsonify({'error': 'まず勤務表を生成してください'}), 400
     
@@ -701,6 +719,57 @@ def download():
         as_attachment=True,
         download_name=filename
     )
+
+
+@app.route('/download_edited', methods=['POST'])
+def download_edited():
+    data = request.json
+    rows = data.get('rows', [])
+    staff_names = data.get('staffNames', [])
+    filename = data.get('filename', 'worker_schedule.xlsx')
+    
+    if not rows or not staff_names:
+        return jsonify({'error': 'データが不足しています'}), 400
+        
+    # DataFrame構築 & request_mask作成
+    df_rows = []
+    request_mask = {}
+    
+    for idx, r in enumerate(rows):
+        row_dict = {
+            '日付': r['day'],
+            '曜日': r['dayOfWeek']
+        }
+        for staff in staff_names:
+            val_data = r['staff'].get(staff, '')
+            
+            # 文字列か辞書かで処理を分ける
+            if isinstance(val_data, dict):
+                val = val_data.get('value', '')
+                is_req = val_data.get('isRequest', False)
+                row_dict[staff] = val
+                if is_req:
+                    request_mask[(idx, staff)] = True
+            else:
+                row_dict[staff] = val_data
+                
+        df_rows.append(row_dict)
+        
+    df = pd.DataFrame(df_rows)
+    
+    try:
+        final_output = create_styled_excel(df, staff_names, request_mask)
+        
+        return send_file(
+            final_output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

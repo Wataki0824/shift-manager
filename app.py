@@ -22,7 +22,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # パスワード設定（環境変数から取得，デフォルトは 'kitakyushu'）
-APP_PASSWORD = os.environ.get('APP_PASSWORD', 'kitakyushu')
+APP_PASSWORD = os.environ.get('APP_PASSWORD', 'kitakyusyu')
 
 
 def login_required(f):

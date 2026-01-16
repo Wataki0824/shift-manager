@@ -6,6 +6,7 @@ Author: Taiki Watanabe
 """
 
 import os
+import sys
 import io
 import random
 from pathlib import Path
@@ -514,6 +515,7 @@ def convert_to_excel_format(df: pd.DataFrame, staff_columns: list) -> pd.DataFra
     for staff in staff_columns:
         short_name = staff.replace('スタッフ', '')
         header.extend([short_name, ''])
+    header.append('予定')
     
     excel_data.append(header)
     
@@ -522,6 +524,9 @@ def convert_to_excel_format(df: pd.DataFrame, staff_columns: list) -> pd.DataFra
         for staff in staff_columns:
             y_mark, time_value = parse_shift_value(row[staff])
             excel_row.extend([y_mark, time_value])
+        
+        # 予定
+        excel_row.append(row.get('予定', ''))
         excel_data.append(excel_row)
     
     return pd.DataFrame(excel_data)
@@ -738,6 +743,7 @@ def generate():
         staff_names = data.get('staffNames', [])
         schedule = data.get('schedule', [])
         headcount = data.get('headcount', {}) # 人数指定受け取り
+        memo_data = data.get('memo', {})      # メモデータ受け取り
         
         if not staff_names:
             return jsonify({'error': 'スタッフ名が入力されていません'}), 400
@@ -818,6 +824,12 @@ def generate():
             if hard == 0 and soft == 0 and is_balanced(y_counts):
                 break
         
+        # メモ列をDataFrameに追加
+        best_result['予定'] = ''
+        for idx, row in best_result.iterrows():
+            day_str = str(row['日付'])
+            best_result.at[idx, '予定'] = memo_data.get(day_str, '')
+
         # 詳細集計を取得
         detailed_counts = get_detailed_counts(best_result, staff_columns)
 
@@ -844,6 +856,7 @@ def generate():
                     'value': val,
                     'isRequest': is_request
                 }
+            row_data['memo'] = row['予定']
             preview_data.append(row_data)
         
         return jsonify({
@@ -866,6 +879,7 @@ def create_styled_excel(df: pd.DataFrame, staff_columns: list, request_mask: dic
     
     # Excel形式に変換
     excel_df = convert_to_excel_format(df, staff_columns)
+    print(f"DEBUG: ExcelDF shape: {excel_df.shape}", file=sys.stderr)
     
     # Excelファイルをメモリに書き込み
     output = io.BytesIO()
@@ -929,13 +943,18 @@ def create_styled_excel(df: pd.DataFrame, staff_columns: list, request_mask: dic
             
             # 希望休ハイライト (request_maskが指定されている場合のみ)
             if request_mask:
-                # request_maskのキーは (row_idx, staff_name)
-                # キー判定のために staff名が必要
-                # staff_columns[i] が現在のスタッフ名
-                
                 if request_mask.get((row_idx, staff), False):
                      cell_val.font = bold_font
                      cell_val.fill = gray_fill
+                     
+    # 予定列のスタイル
+    memo_col_idx = 3 + len(staff_columns) * 2
+    memo_col_letter = get_column_letter(memo_col_idx)
+    ws.column_dimensions[memo_col_letter].width = 20
+    
+    memo_header = ws.cell(row=1, column=memo_col_idx, value="予定")
+    memo_header.font = large_font
+    memo_header.alignment = Alignment(horizontal='center', vertical='center')
     
     # A, B列も中央揃え
     for row in range(1, ws.max_row + 1):
@@ -978,6 +997,8 @@ def download_edited():
     filename = data.get('filename', 'worker_schedule.xlsx')
     # memo = data.get('memo', '') # 削除
     
+    print(f"DEBUG: download_edited called. Rows: {len(rows)}, Staff: {len(staff_names)}", file=sys.stderr)
+    
     if not rows or not staff_names:
         return jsonify({'error': 'データが不足しています'}), 400
         
@@ -988,7 +1009,8 @@ def download_edited():
     for idx, r in enumerate(rows):
         row_dict = {
             '日付': r['day'],
-            '曜日': r['dayOfWeek']
+            '曜日': r['dayOfWeek'],
+            '予定': r.get('memo', '')
         }
         for staff in staff_names:
             val_data = r['staff'].get(staff, '')
@@ -1006,6 +1028,7 @@ def download_edited():
         df_rows.append(row_dict)
         
     df = pd.DataFrame(df_rows)
+    print(f"DEBUG: DF Created. Columns: {df.columns}", file=sys.stderr)
     
     try:
         final_output = create_styled_excel(df, staff_names, request_mask)

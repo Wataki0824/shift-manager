@@ -100,6 +100,7 @@
                                 <th id="staffHeader2">B</th>
                                 <th id="staffHeader3">C</th>
                                 <th>出勤人数</th>
+                                <th>予定</th>
                             </tr>
                         </thead>
                         <tbody id="calendarBody">
@@ -112,7 +113,8 @@
             <script>
                 // グローバル変数
                 let currentTool = ''; // ''(消去), '公', '年', '9', '10'
-                let headcountData = {}; // {day: count} (0=auto, 1, 2, 3)
+                let headcountData = {}; // {day: count}
+                let memoData = {}; // {day: string}
 
                 function selectTool(btn, val) {
                     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
@@ -123,7 +125,12 @@
                 function updateHeadcount(day, val) {
                     headcountData[day] = parseInt(val);
                 }
+
+                function updateMemo(day, val) {
+                    memoData[day] = val;
+                }
             </script>
+
 
             <!-- 生成ボタン -->
             <section class="action-section">
@@ -262,6 +269,10 @@
                     </select>
                 `;
 
+                // メモ入力
+                const currentMemo = memoData[day] || '';
+                const memoInput = `<input type="text" class="memo-input" style="width:100%; border:none; background:transparent; padding:4px;" onchange="updateMemo(${day}, this.value)" value="${currentMemo}" placeholder="予定">`;
+
                 row.innerHTML = `
                     <td class="day-cell">${day}</td>
                     <td class="day-name-cell ${isWeekend ? 'weekend' : ''}">${dayName}</td>
@@ -269,6 +280,7 @@
                     <td class="off-cell" data-day="${day}" data-staff="2"></td>
                     <td class="off-cell" data-day="${day}" data-staff="3"></td>
                     <td>${headcountSelect}</td>
+                    <td style="padding:0;">${memoInput}</td>
                 `;
 
                 calendarBody.appendChild(row);
@@ -356,8 +368,10 @@
                 holidayCount: parseInt(document.getElementById('staff1Holidays').value) || 8,
                 staffNames: staffNames,
                 schedule: scheduleData,
-                // memo: 削除
-                headcount: headcountData
+                staffNames: staffNames,
+                schedule: scheduleData,
+                headcount: headcountData,
+                memo: memoData
             };
         }
 
@@ -435,6 +449,7 @@
                     <th>日付</th>
                     <th>曜日</th>
                     ${data.staffNames.map(name => `<th colspan="2">${name}</th>`).join('')}
+                    <th>予定</th>
                 </tr>
             `;
 
@@ -476,6 +491,11 @@
                 }
 
                 rowHtml += '</tr>';
+
+                // メモ列（編集可能にする）
+                const memoVal = row.memo || '';
+                rowHtml = rowHtml.replace('</tr>', `<td class="preview-cell editable-cell memo-cell" onclick="editMemo(this)">${memoVal}</td></tr>`);
+
                 previewBody.innerHTML += rowHtml;
             }
 
@@ -539,6 +559,29 @@
             }
         }
 
+        // メモ編集用
+        function editMemo(td) {
+            if (td.querySelector('input')) return;
+            const current = td.textContent;
+            td.innerHTML = '';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = current;
+            input.style.width = '100%';
+            input.style.border = 'none';
+            input.style.background = 'transparent';
+
+            input.addEventListener('blur', () => {
+                td.textContent = input.value;
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') input.blur();
+            });
+
+            td.appendChild(input);
+            input.focus();
+        }
+
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             errorSection.style.display = 'block';
@@ -549,7 +592,7 @@
             const table = document.querySelector('.preview-table');
             if (!table) return;
 
-            const staffNames = Array.from(table.querySelectorAll('thead th')).slice(2).map(th => th.textContent);
+            const staffNames = Array.from(table.querySelectorAll('thead th[colspan="2"]')).map(th => th.textContent);
             const rows = [];
             const trs = table.querySelectorAll('tbody tr');
 
@@ -587,7 +630,8 @@
                 rows.push({
                     day: day,
                     dayOfWeek: dayOfWeek,
-                    staff: staffData
+                    staff: staffData,
+                    memo: tr.querySelector('.memo-cell').textContent.trim()
                 });
             }
 
@@ -599,7 +643,6 @@
                         rows: rows,
                         staffNames: staffNames,
                         filename: document.getElementById('resultSection').dataset.filename || 'schedule.xlsx'
-                        // memo: 削除
                     })
                 });
 

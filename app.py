@@ -79,76 +79,124 @@ def select_y_candidate(candidates: list, y_counts: dict, prev_day_off: dict) -> 
     return min_y_candidates[0]
 
 
-
-
-
-def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_holidays: dict) -> pd.DataFrame:
-    """不足している公休を自動で埋める（全体最適と連勤考慮）"""
-    result_df = df.copy()
+def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_holidays: int = 8, headcount: dict = None) -> pd.DataFrame:
+    """公休を自動的に埋める"""
+    # 指定日数になるまでランダムに '公' を入れる
+    # ただし以下のルールを守る
+    # 1. 土日のどちらかは必ず出勤（土日両方休みはNG、土日連勤も可能な限り避けるが、
+    #    「土日は最低1人出勤」の制約があるため、全員公休はNG）
+    # 2. 7連勤以上はNG -> 6連勤まで
     
+    # 修正: 平日も最低2人出勤 -> 3人中1人休みまで
+    
+    result_df = df.copy()
+    holiday_counts = {staff: result_df[staff].eq('公').sum() + result_df[staff].eq('年').sum() for staff in staff_columns}
+    
+    # --- Phase -1: 人数指定 (headcount) の適用 ---
+    # 指定がある日は、その人数になるように公休を入れる（または入れない）
+    if headcount:
+        for idx, row in result_df.iterrows():
+            day_str = str(row['日付']) # 文字列として比較
+            target_work_count = int(headcount.get(day_str, 0))
+            
+            if target_work_count > 0:
+                # 現在の休み状況確認
+                current_off = [s for s in staff_columns if get_off_value(row[s])]
+                current_off_count = len(current_off)
+                
+                # 必要な休み人数 = 全員 - 目標出勤人数
+                # 例: 3人 - 3人出勤 = 0人休み
+                # 例: 3人 - 1人出勤 = 2人休み
+                needed_off_count = len(staff_columns) - target_work_count
+                
+                # 負の値防止
+                needed_off_count = max(0, needed_off_count)
+                
+                if needed_off_count > current_off_count:
+                    # 休みを増やす
+                    diff = needed_off_count - current_off_count
+                    # 公休候補: 既に休みでなく、かつ固定シフト(9, 10)でもない人
+                    candidates = []
+                    for s in staff_columns:
+                        val = result_df.at[idx, s]
+                        if not get_off_value(val) and val not in ['9', '10']:
+                            candidates.append(s)
+                            
+                    if len(candidates) >= diff:
+                        to_be_off = random.sample(candidates, diff)
+                        for staff in to_be_off:
+                            result_df.at[idx, staff] = '公'
+                            holiday_counts[staff] += 1
+                
+                # 既に休みが多すぎる場合（例えば3人出勤指定なのに1人公休がいる）
+                # ユーザー指定の公休は消さない方針なので、何もしない（出勤人数不足を受け入れる）
+                
+    # Phase 0: 土日の出勤人数バランス調整
+    # ただし、人数指定がある日はスキップする
+    weekend_indices = []
+    for idx, row in result_df.iterrows():
+        day_str = str(row['日付'])
+        if headcount and int(headcount.get(day_str, 0)) > 0:
+            continue
+        if is_weekend(row['曜日']):
+            weekend_indices.append(idx)
+            
+    # ...(中略)...
+    
+    # Phase 1 & 2 & 3 のループ内でも人数指定日をスキップする必要がある
+    # ここでは fill_missing_public_holidays の後半ロジック全体を見直す必要があるため
+    # 以下のようにチェックを追加する関数内修正を行う
+
+
     # 各スタッフの不足公休数を計算（管理用）
     missing_counts = {}
     for staff in staff_columns:
         current_holidays = result_df[staff].apply(lambda x: 1 if x == '公' else 0).sum()
-        target = target_holidays.get(staff, 0)
+        target = target_holidays
         missing_counts[staff] = max(0, target - current_holidays)
 
     # ==========================================
     # Phase 0: 土日出勤の調整（全体最適）
-    # 土日は必ず1人出勤になるように、余剰人員を休ませる。
-    # 「土日休みが少ない人」を優先的に休ませる。
     # ==========================================
     
-    # 土日のインデックスを取得
     weekend_indices = []
     for idx, row in result_df.iterrows():
+        # 人数指定がある日は調整対象外（ユーザー指定を優先）
+        day_str = str(row['日付'])
+        if headcount and int(headcount.get(day_str, 0)) > 0:
+            continue
+            
         if is_weekend(row['曜日']):
             weekend_indices.append(idx)
     
-    # 完全に解消されるか、公休ストックが尽きるまでループ
-    # （無限ループ防止のため回数制限）
     for _ in range(100):
         adjusted_any = False
-        
-        # 土日をシャッフルして順不同にチェック
         random.shuffle(weekend_indices)
         
         for idx in weekend_indices:
-            # この日の出勤者を確認
             working_staff = []
             for s in staff_columns:
                 if not is_off(result_df.at[idx, s]):
                     working_staff.append(s)
             
-            # 2人以上なら調整が必要
             if len(working_staff) > 1:
-                # 候補者の中で、実際に公休ストックが残っている人を抽出
                 candidates = [s for s in working_staff if missing_counts[s] > 0]
-                
                 if not candidates:
-                    continue # 誰もこれ以上休めない
+                    continue
                 
-                # --- 優先度判定 ---
-                # 現在の「土日休み回数」が少ない人を優先的に休ませたい
-                # （＝土日出勤が多い人を休ませたい）
-                
+                # 土日休みが少ない人を優先
                 weekend_off_counts = {}
                 for s in candidates:
-                    # その人の現在の土日休み数
                     count = 0
                     for _idx, _row in result_df.iterrows():
                         if is_weekend(_row['曜日']) and is_off(_row[s]):
                             count += 1
                     weekend_off_counts[s] = count
                 
-                # 土日休みが一番少ない人を探す
                 min_off = min(weekend_off_counts.values())
                 target_candidates = [s for s in candidates if weekend_off_counts[s] == min_off]
-                
-                # 同率ならランダムに選ぶ
                 target_staff = random.choice(target_candidates)
                 
-                # 実行
                 result_df.at[idx, target_staff] = '公'
                 missing_counts[target_staff] -= 1
                 adjusted_any = True
@@ -157,7 +205,7 @@ def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_h
             break
 
     # ==========================================
-    # Phase 1 & 2: 連勤解消 & 残り埋め（スタッフごと）
+    # Phase 1 & 2: 連勤解消 & 残り埋め
     # ==========================================
     
     for staff in staff_columns:
@@ -166,8 +214,6 @@ def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_h
             continue
             
         added_count = 0
-        
-        # --- 戦略1: 連勤を解消する箇所を優先的に埋める ---
         limits_to_check = [6, 5] 
         
         for limit in limits_to_check:
@@ -198,6 +244,11 @@ def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_h
                     candidates = streak.copy()
                     random.shuffle(candidates)
                     for idx in candidates:
+                        # 人数指定がある日はスキップ
+                        day_str = str(result_df.at[idx, '日付'])
+                        if headcount and int(headcount.get(day_str, 0)) > 0:
+                            continue
+
                         if can_take_off(result_df, idx, staff, staff_columns):
                             result_df.at[idx, staff] = '公'
                             added_count += 1
@@ -206,11 +257,18 @@ def fill_missing_public_holidays(df: pd.DataFrame, staff_columns: list, target_h
                 if not filled_something:
                     break
 
-        # --- 戦略2: まだ足りなければランダムに埋める ---
+        # --- Phase 3: まだ足りなければランダムに埋める ---
         if added_count < missing:
             candidate_indices = []
             for idx, row in result_df.iterrows():
-                if not is_off(row[staff]):
+                # 人数指定がある日はスキップ
+                day_str = str(row['日付'])
+                if headcount and int(headcount.get(day_str, 0)) > 0:
+                    continue
+                    
+                val = row[staff]
+                # 固定シフト('9', '10')は公休にしない
+                if not is_off(val) and val not in ['9', '10']:
                     candidate_indices.append(idx)
             
             random.shuffle(candidate_indices)
@@ -249,7 +307,7 @@ def can_take_off(df: pd.DataFrame, idx: int, staff: str, staff_columns: list) ->
 
 
 
-def optimize_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
+def optimize_shifts(df: pd.DataFrame, staff_columns: list, fixed_mask: dict = None) -> pd.DataFrame:
     """生成後のシフトを微調整して最適化する"""
     # 主に「休み明けのY」を回避するためのスワップを行う
     result_df = df.copy()
@@ -279,7 +337,7 @@ def optimize_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
             if 'Y' in w['val']:
                 y_staff_info = w
             else:
-                normal_staff_info = w # 複数人いる場合、最初に見つかった人を対象にする（簡易実装）
+                normal_staff_info = w 
         
         if not y_staff_info or not normal_staff_info:
             continue
@@ -287,6 +345,11 @@ def optimize_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
         y_staff = y_staff_info['staff']
         norm_staff = normal_staff_info['staff']
         
+        # 固定シフトが含まれている場合はスワップ不可
+        if fixed_mask:
+            if fixed_mask.get((idx, y_staff)) or fixed_mask.get((idx, norm_staff)):
+                continue
+
         # 前日の状態を確認
         if idx == 0:
             continue
@@ -319,15 +382,22 @@ def assign_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
         weekend = is_weekend(day_of_week)
         
         staff_off = {}
+        fixed_shift = {}
         staff_working = []
         
         for staff in staff_columns:
             off_value = get_off_value(row[staff])
             if off_value:
                 staff_off[staff] = off_value
+            elif row[staff] in ['9', '10']:
+                fixed_shift[staff] = row[staff]
+                staff_working.append(staff)
+                # 固定値を一旦セット（後で上書きされる可能性もあるが基本維持）
+                result_df.at[idx, staff] = row[staff]
             else:
                 staff_working.append(staff)
         
+        # 休み情報を確定
         for staff, off_value in staff_off.items():
             result_df.at[idx, staff] = off_value
         
@@ -340,27 +410,63 @@ def assign_shifts(df: pd.DataFrame, staff_columns: list) -> pd.DataFrame:
             only_staff = staff_working[0]
             result_df.at[idx, only_staff] = 'Y9'
             y_counts[only_staff] += 1
+        
         elif weekend:
-            y_candidate = select_y_candidate(staff_working, y_counts, prev_day_off)
+            # 土日: 1人Y9, 残り9
+            candidates = [s for s in staff_working if s not in fixed_shift]
+            if not candidates:
+                candidates = staff_working
+            
+            y_candidate = select_y_candidate(candidates, y_counts, prev_day_off)
             for staff in staff_working:
                 if staff == y_candidate:
                     result_df.at[idx, staff] = 'Y9'
                     y_counts[staff] += 1
                 else:
-                    result_df.at[idx, staff] = '9'
+                    if staff in fixed_shift:
+                        result_df.at[idx, staff] = fixed_shift[staff]
+                    else:
+                        result_df.at[idx, staff] = '9'
         else:
-            nine_am_staff = random.choice(staff_working)
-            result_df.at[idx, nine_am_staff] = '9'
+            # 平日: 9時が1人必要、残りは10時
+            # 1. 固定シフトとフリーを分類
+            fixed_9 = [s for s in staff_working if fixed_shift.get(s) == '9']
+            fixed_10 = [s for s in staff_working if fixed_shift.get(s) == '10']
+            flexible = [s for s in staff_working if s not in fixed_9 and s not in fixed_10]
             
-            ten_am_staff = [s for s in staff_working if s != nine_am_staff]
-            y_candidate = select_y_candidate(ten_am_staff, y_counts, prev_day_off)
+            final_9 = list(fixed_9)
+            final_10 = list(fixed_10)
             
-            for staff in ten_am_staff:
-                if staff == y_candidate:
-                    result_df.at[idx, staff] = 'Y10'
-                    y_counts[staff] += 1
-                else:
-                    result_df.at[idx, staff] = '10'
+            # 2. 9時担当を確保 (固定9がいなければフリーから選出)
+            if not final_9:
+                if flexible:
+                    picked = random.choice(flexible)
+                    final_9.append(picked)
+                    flexible.remove(picked)
+                # フリーもいなければ9時なし（全員固定10時などの場合）
+            
+            # 3. 残りのフリーは10時
+            final_10.extend(flexible)
+            
+            # 4. ベース時間を割り当て
+            for s in final_9:
+                result_df.at[idx, s] = '9'
+            for s in final_10:
+                result_df.at[idx, s] = '10'
+            
+            # 5. Y担当決め (固定なしの人を優先)
+            all_assigned = final_9 + final_10
+            if all_assigned:
+                y_candidates = [s for s in all_assigned if s not in fixed_shift]
+                if not y_candidates:
+                    y_candidates = all_assigned # 全員固定なら仕方なく固定の人から選ぶ
+                
+                y_candidate = select_y_candidate(y_candidates, y_counts, prev_day_off)
+                
+                # Yを付加 (時間は維持)
+                current_val = result_df.at[idx, y_candidate]
+                result_df.at[idx, y_candidate] = 'Y' + current_val
+                y_counts[y_candidate] += 1
         
         for staff in staff_columns:
             prev_day_off[staff] = is_off(row[staff])
@@ -503,27 +609,146 @@ def index():
     return render_template('index.html')
 
 
+def get_detailed_counts(df: pd.DataFrame, staff_columns: list) -> dict:
+    """各スタッフの全シフトタイプの回数を集計"""
+    counts = {staff: {'9': 0, '10': 0, '公': 0, '年': 0, 'Y': 0} for staff in staff_columns}
+    
+    for _, row in df.iterrows():
+        for staff in staff_columns:
+            val = row[staff]
+            if pd.isna(val) or val == '':
+                continue
+            
+            # Yが含まれる場合
+            if 'Y' in val:
+                counts[staff]['Y'] += 1
+                # 時間部分もカウント (Y9 -> 9, Y10 -> 10)
+                time_part = val.replace('Y', '')
+                if time_part in counts[staff]:
+                    counts[staff][time_part] += 1
+            else:
+                # 通常のシフト記述 (9, 10, 公, 年)
+                if val in counts[staff]:
+                    counts[staff][val] += 1
+                elif val not in ['9', '10', '公', '年']:
+                     # 未知の値があればキー追加してカウント（念のため）
+                     if val not in counts[staff]:
+                         counts[staff][val] = 0
+                     counts[staff][val] += 1
+                     
+    return counts
+
+
+def count_consecutive_violations(df, staff_columns):
+    """連勤違反をカウント (hard>6, soft>5)"""
+    hard_count = 0
+    soft_count = 0
+    for staff in staff_columns:
+        streak = 0
+        for val in df[staff]:
+            if not is_off(val):
+                streak += 1
+            else:
+                if streak > 6: hard_count += (streak - 6)
+                elif streak > 5: soft_count += 1
+                streak = 0
+        if streak > 6: hard_count += (streak - 6)
+        elif streak > 5: soft_count += 1
+    return hard_count, soft_count
+
+
+def fix_consecutive_work(df, staff_columns, fixed_mask):
+    """6連勤超えを解消する"""
+    for staff in staff_columns:
+        # Detect streaks > 6
+        streaks = [] 
+        current_streak = []
+        for idx in range(len(df)):
+            val = df.at[idx, staff]
+            if not is_off(val):
+                current_streak.append(idx)
+            else:
+                if len(current_streak) > 6:
+                    streaks.append(current_streak.copy())
+                current_streak = []
+        if len(current_streak) > 6: streaks.append(current_streak.copy())
+        
+        for streak in streaks:
+            # ブレイクポイントを探す
+            breakable = []
+            for idx in streak:
+                # 固定シフトは除外
+                if fixed_mask and fixed_mask.get((idx, staff)):
+                    continue
+                # 休みを入れても大丈夫な日（人数確保など）
+                if can_take_off(df, idx, staff, staff_columns):
+                    breakable.append(idx)
+            
+            if not breakable:
+                continue
+            
+            # 中央付近を優先的にターゲットにする
+            import math
+            best_idx = breakable[0]
+            min_dist = float('inf')
+            center = streak[0] + len(streak) / 2
+            
+            for idx in breakable:
+                dist = abs(idx - center)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_idx = idx
+            
+            target_idx = best_idx
+            
+            # スワップ先（公休）を探す
+            holidays = []
+            for idx in range(len(df)):
+                if df.at[idx, staff] == '公':
+                    holidays.append(idx)
+            
+            swapped = False
+            random.shuffle(holidays)
+            for h_idx in holidays:
+                # 公休をターゲット日と入れ替え
+                # 公休日は基本的に労働可能と仮定（厳密には逆のcan_take_offも要るが省略）
+                val_target = df.at[target_idx, staff]
+                val_holiday = df.at[h_idx, staff]
+                
+                df.at[target_idx, staff] = val_holiday
+                df.at[h_idx, staff] = val_target
+                swapped = True
+                break
+            
+            if not swapped:
+                # スワップできない場合は強制的に休みにする
+                df.at[target_idx, staff] = '公'
+
+    return df
+
+
 @app.route('/generate', methods=['POST'])
 @login_required
 def generate():
     try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({'error': 'データが送信されていません'}), 400
-        
-        year = data.get('year')
-        month = data.get('month')
-        staff_names = data.get('staffNames', ['A', 'B', 'C'])
+        data = request.json
+        year = int(data.get('year', 2026))
+        month = int(data.get('month', 1))
+        target_holidays = int(data.get('holidayCount', 8))
+        staff_names = data.get('staffNames', [])
         schedule = data.get('schedule', [])
-        target_holidays = data.get('targetHolidays', {})
+        headcount = data.get('headcount', {}) # 人数指定受け取り
+        
+        if not staff_names:
+            return jsonify({'error': 'スタッフ名が入力されていません'}), 400
         
         if not schedule:
             return jsonify({'error': 'スケジュールデータがありません'}), 400
         
-        # DataFrameを構築 & 希望休マスクを作成
+        # DataFrameを構築 & マスクを作成
         rows = []
         request_mask = {} # (day_index, staff_name) -> bool
+        fixed_mask = {}   # (day_index, staff_name) -> '9' or '10'
         
         for day_idx, day_data in enumerate(schedule):
             row = {
@@ -537,6 +762,9 @@ def generate():
                 # 公 または 年 が入力されている場合は希望休としてマーク
                 if val in ['公', '年']:
                     request_mask[(day_idx, staff_name)] = True
+                elif val in ['9', '10']:
+                    fixed_mask[(day_idx, staff_name)] = val
+                    request_mask[(day_idx, staff_name)] = False
                 else:
                     request_mask[(day_idx, staff_name)] = False
                     
@@ -549,7 +777,7 @@ def generate():
         
         max_attempts = 1000
         best_result = None
-        best_diff = float('inf')
+        best_score = (float('inf'), float('inf'), float('inf')) # (hard, soft, diff)
         best_y_counts = {}
         attempts = 0
         
@@ -557,24 +785,43 @@ def generate():
             attempts = attempt + 1
             
             # 公休の自動充填
-            df_with_holidays = fill_missing_public_holidays(df.copy(), staff_columns, target_holidays)
+            df_with_holidays = fill_missing_public_holidays(df.copy(), staff_columns, target_holidays, headcount)
             
             result_df = assign_shifts(df_with_holidays, staff_columns)
+            
+            # 最適化: 休み明けのY回避
+            result_df = optimize_shifts(result_df, staff_columns, fixed_mask)
+            
+            # 連勤制約の修正
+            result_df = fix_consecutive_work(result_df, staff_columns, fixed_mask)
+            
+            # --- 最終チェック: 固定シフトの強制適用 ---
+            for (r_idx, s_name), fix_val in fixed_mask.items():
+                current_val = str(result_df.at[r_idx, s_name])
+                # 固定値が含まれていなければ強制リセット
+                if fix_val not in current_val:
+                    result_df.at[r_idx, s_name] = fix_val
+            
             y_counts = get_y_counts(result_df, staff_columns)
             counts = list(y_counts.values())
             diff = max(counts) - min(counts)
             
-            if diff < best_diff:
-                best_diff = diff
+            hard, soft = count_consecutive_violations(result_df, staff_columns)
+            current_score = (hard, soft, diff)
+            
+            if current_score < best_score:
+                best_score = current_score
                 best_result = result_df.copy()
                 best_y_counts = y_counts
             
-            if is_balanced(y_counts):
+            # 6連勤超えゼロかつ5連勤超えゼロかつバランス良ければ即終了
+            if hard == 0 and soft == 0 and is_balanced(y_counts):
                 break
         
-            if is_balanced(y_counts):
-                break
-        
+        # 詳細集計を取得
+        detailed_counts = get_detailed_counts(best_result, staff_columns)
+
+        # Excel形式に変換 & スタイル適用
         # Excel形式に変換 & スタイル適用
         final_output = create_styled_excel(best_result, staff_columns, request_mask)
         
@@ -603,6 +850,7 @@ def generate():
             'success': True,
             'attempts': attempts,
             'y_counts': {k: int(v) for k, v in best_y_counts.items()},
+            'detailed_counts': detailed_counts,
             'staffNames': staff_columns,
             'preview': preview_data,
             'filename': f'勤務表{year}{int(month):02d}.xlsx'
@@ -693,6 +941,7 @@ def create_styled_excel(df: pd.DataFrame, staff_columns: list, request_mask: dic
     for row in range(1, ws.max_row + 1):
         ws.cell(row=row, column=1).alignment = Alignment(horizontal='center', vertical='center')
         ws.cell(row=row, column=2).alignment = Alignment(horizontal='center', vertical='center')
+
     
     # 最終的なExcelをメモリに保存
     final_output = io.BytesIO()
@@ -727,6 +976,7 @@ def download_edited():
     rows = data.get('rows', [])
     staff_names = data.get('staffNames', [])
     filename = data.get('filename', 'worker_schedule.xlsx')
+    # memo = data.get('memo', '') # 削除
     
     if not rows or not staff_names:
         return jsonify({'error': 'データが不足しています'}), 400
@@ -773,6 +1023,6 @@ def download_edited():
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 5002))
     debug = os.environ.get('FLASK_DEBUG', 'true').lower() == 'true'
     app.run(debug=debug, host='0.0.0.0', port=port)

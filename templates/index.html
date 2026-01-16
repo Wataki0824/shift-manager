@@ -75,8 +75,21 @@
 
             <!-- Step 3: 休み入力カレンダー -->
             <section class="form-section">
-                <h2 class="section-title">3. 休みを選択</h2>
-                <p class="help-text">各日のセルをクリックして休みのタイプを選択（空欄→公→年→空欄...）</p>
+                <h2 class="section-title">3. 休み・シフト固定・人数指定</h2>
+                <div class="alert-info">
+                    各セルをクリックして入力します。また、右端の列でその日の出勤人数を指定できます(3カメ等)。
+                </div>
+
+                <!-- ツールバー -->
+                <div class="toolbar">
+                    <span class="toolbar-label">入力ツール:</span>
+                    <button class="tool-btn active" onclick="selectTool(this, '')">🧹 消去</button>
+                    <button class="tool-btn" onclick="selectTool(this, '公')">公</button>
+                    <button class="tool-btn" onclick="selectTool(this, '年')">年</button>
+                    <button class="tool-btn" onclick="selectTool(this, '9')">9時</button>
+                    <button class="tool-btn" onclick="selectTool(this, '10')">10時</button>
+                </div>
+
                 <div class="calendar-container">
                     <table class="calendar-table" id="calendarTable">
                         <thead>
@@ -86,6 +99,7 @@
                                 <th id="staffHeader1">A</th>
                                 <th id="staffHeader2">B</th>
                                 <th id="staffHeader3">C</th>
+                                <th>出勤人数</th>
                             </tr>
                         </thead>
                         <tbody id="calendarBody">
@@ -94,6 +108,22 @@
                     </table>
                 </div>
             </section>
+
+            <script>
+                // グローバル変数
+                let currentTool = ''; // ''(消去), '公', '年', '9', '10'
+                let headcountData = {}; // {day: count} (0=auto, 1, 2, 3)
+
+                function selectTool(btn, val) {
+                    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentTool = val;
+                }
+
+                function updateHeadcount(day, val) {
+                    headcountData[day] = parseInt(val);
+                }
+            </script>
 
             <!-- 生成ボタン -->
             <section class="action-section">
@@ -221,29 +251,38 @@
                 const row = document.createElement('tr');
                 if (isWeekend) row.classList.add('weekend-row');
 
+                // 人数指定セレクトのHTML生成
+                const currentHeadcount = headcountData[day] || 0;
+                const headcountSelect = `
+                    <select onchange="updateHeadcount(${day}, this.value)" class="headcount-select" style="width:100%; min-width:60px;">
+                        <option value="0" ${currentHeadcount == 0 ? 'selected' : ''}>自動</option>
+                        <option value="1" ${currentHeadcount == 1 ? 'selected' : ''}>1人</option>
+                        <option value="2" ${currentHeadcount == 2 ? 'selected' : ''}>2人</option>
+                        <option value="3" ${currentHeadcount == 3 ? 'selected' : ''}>3人</option>
+                    </select>
+                `;
+
                 row.innerHTML = `
                     <td class="day-cell">${day}</td>
                     <td class="day-name-cell ${isWeekend ? 'weekend' : ''}">${dayName}</td>
-                    <td class="off-cell" data-day="${day}" data-staff="1" data-off-index="0"></td>
-                    <td class="off-cell" data-day="${day}" data-staff="2" data-off-index="0"></td>
-                    <td class="off-cell" data-day="${day}" data-staff="3" data-off-index="0"></td>
+                    <td class="off-cell" data-day="${day}" data-staff="1"></td>
+                    <td class="off-cell" data-day="${day}" data-staff="2"></td>
+                    <td class="off-cell" data-day="${day}" data-staff="3"></td>
+                    <td>${headcountSelect}</td>
                 `;
 
                 calendarBody.appendChild(row);
             }
 
-            // セルクリックイベント
+            // セルクリックイベント (ペンツール方式)
             document.querySelectorAll('.off-cell').forEach(cell => {
                 cell.addEventListener('click', () => {
-                    let index = parseInt(cell.dataset.offIndex);
-                    index = (index + 1) % OFF_TYPES.length;
-                    cell.dataset.offIndex = index;
-                    cell.textContent = OFF_TYPES[index];
-
-                    // スタイル更新
-                    cell.classList.remove('off-public', 'off-annual');
-                    if (OFF_TYPES[index] === '公') cell.classList.add('off-public');
-                    if (OFF_TYPES[index] === '年') cell.classList.add('off-annual');
+                    cell.textContent = currentTool;
+                    cell.className = 'off-cell'; // クラスリセット
+                    if (currentTool === '公') cell.classList.add('off-public');
+                    if (currentTool === '年') cell.classList.add('off-annual');
+                    if (currentTool === '9') cell.classList.add('shift-9');
+                    if (currentTool === '10') cell.classList.add('shift-10');
                 });
             });
 
@@ -263,21 +302,17 @@
             ];
 
             selects.forEach(select => {
-                // 現在の選択値を保持
                 const currentValue = select.value;
                 select.innerHTML = '';
-
                 for (let i = minHolidays; i <= maxHolidays; i++) {
                     const option = document.createElement('option');
                     option.value = i;
                     option.textContent = `${i}日`;
                     if (i === weekendCount) {
-                        option.selected = true; // デフォルトは基準値
+                        option.selected = true;
                     }
                     select.appendChild(option);
                 }
-
-                // もし以前の値が範囲内にあれば復元
                 if (currentValue && currentValue >= minHolidays && currentValue <= maxHolidays) {
                     select.value = currentValue;
                 }
@@ -293,11 +328,6 @@
                 staff2Input.value || 'B',
                 staff3Input.value || 'C'
             ];
-
-            const targetHolidays = {};
-            targetHolidays[staffNames[0]] = parseInt(document.getElementById('staff1Holidays').value);
-            targetHolidays[staffNames[1]] = parseInt(document.getElementById('staff2Holidays').value);
-            targetHolidays[staffNames[2]] = parseInt(document.getElementById('staff3Holidays').value);
 
             const daysInMonth = new Date(year, month, 0).getDate();
             const scheduleData = [];
@@ -323,63 +353,83 @@
             return {
                 year: year,
                 month: month,
+                holidayCount: parseInt(document.getElementById('staff1Holidays').value) || 8,
                 staffNames: staffNames,
-                targetHolidays: targetHolidays,
-                schedule: scheduleData
+                schedule: scheduleData,
+                // memo: 削除
+                headcount: headcountData
             };
         }
 
         // 生成ボタン
         generateBtn.addEventListener('click', async () => {
-            loadingOverlay.style.display = 'flex';
+            const data = collectInputData();
+
+            // UIリセット
             resultSection.style.display = 'none';
             errorSection.style.display = 'none';
-
-            const inputData = collectInputData();
+            loadingOverlay.style.display = 'flex';
 
             try {
                 const response = await fetch('/generate', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(inputData)
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
                 });
 
-                const data = await response.json();
+                const result = await response.json();
 
-                if (data.success) {
-                    showResult(data);
+                if (result.success) {
+                    showResult(result);
                 } else {
-                    showError(data.error);
+                    showError(result.error || '不明なエラーが発生しました');
                 }
-            } catch (error) {
-                showError('通信エラーが発生しました');
+            } catch (err) {
+                showError('通信エラーが発生しました: ' + err.message);
             } finally {
                 loadingOverlay.style.display = 'none';
             }
         });
 
         function showResult(data) {
-            // ファイル名を保存
             if (data.filename) {
                 resultSection.dataset.filename = data.filename;
             }
 
             const yCountsDiv = document.getElementById('yCounts');
             yCountsDiv.innerHTML = '';
-            for (const [name, count] of Object.entries(data.y_counts)) {
-                const item = document.createElement('div');
-                item.className = 'y-count-item';
-                item.innerHTML = `<span class="name">${name}</span><span class="count">${count}回</span>`;
-                yCountsDiv.appendChild(item);
+
+            // 詳細集計表示
+            if (data.detailed_counts) {
+                const table = document.createElement('table');
+                table.className = 'counts-table';
+
+                const thead = document.createElement('thead');
+                thead.innerHTML = '<tr><th>名前</th><th>Y</th><th>9</th><th>10</th><th>公</th><th>年</th></tr>';
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                for (const staffName of data.staffNames) {
+                    const counts = data.detailed_counts[staffName] || {};
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td class="font-bold">${staffName}</td>
+                        <td class="count-y">${counts['Y'] || 0}</td>
+                        <td>${counts['9'] || 0}</td>
+                        <td>${counts['10'] || 0}</td>
+                        <td>${counts['公'] || 0}</td>
+                        <td>${counts['年'] || 0}</td>
+                    `;
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+                yCountsDiv.appendChild(table);
             }
 
             // プレビューテーブル生成
             const previewHead = document.getElementById('previewHead');
             const previewBody = document.getElementById('previewBody');
 
-            // ヘッダー
             previewHead.innerHTML = `
                 <tr>
                     <th>日付</th>
@@ -388,7 +438,6 @@
                 </tr>
             `;
 
-            // ボディ
             previewBody.innerHTML = '';
             for (const row of data.preview) {
                 const dayOfWeek = row.dayOfWeek;
@@ -431,13 +480,10 @@
             }
 
             resultSection.style.display = 'block';
-
-            // 結果セクションにスクロール
             resultSection.scrollIntoView({ behavior: 'smooth' });
         }
 
         // --- 編集機能 ---
-
         function toggleY(td) {
             if (td.textContent.trim() === 'Y') {
                 td.textContent = '';
@@ -449,7 +495,6 @@
         }
 
         function editTime(td) {
-            // すでに編集モードなら何もしない
             if (td.querySelector('select')) return;
 
             const currentValue = td.textContent.trim();
@@ -459,7 +504,6 @@
             select.className = 'edit-select';
 
             const options = ['9', '10', '公', '年'];
-            // もし現在の値が上記以外なら（例: 空欄など）、それも追加するか、デフォルト9にするか
             if (!options.includes(currentValue) && currentValue !== '') {
                 options.push(currentValue);
             }
@@ -472,9 +516,7 @@
                 select.appendChild(option);
             }
 
-            // フォーカスが外れたら確定
             select.addEventListener('blur', () => confirmEdit(td, select));
-            // 変更時にも確定する場合はここ（今回はblurだけでいいかもだが、使い勝手的にEnter対応等が望ましい）
             select.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') select.blur();
             });
@@ -487,24 +529,14 @@
             const newValue = select.value;
             td.textContent = newValue;
 
-            // クラス更新
-            td.classList.remove('is-off', 'request-off'); // request-offも一旦外す（編集した時点で手動オーバーライドとみなす）
+            td.classList.remove('is-off', 'request-off');
 
             if (newValue === '公' || newValue === '年') {
                 td.classList.add('is-off');
-                // 元々が希望休だった場合は、公/年を選んでいる限りrequest-offを維持したい場合もあるが
-                // ここでは「編集後のスタイル」として、シンプルに is-off のみを適用（赤字）。
-                // もし灰色にしたいならここで request-off を足せば良いが、
-                // 「手動で公にした」ことを明確にするなら色を変えるのも手。
-                // ユーザー要望「公を入力するセルだけ灰色」に従うなら：
                 if (newValue === '公') {
-                    td.classList.add('request-off'); // 公を選んだら灰色にする
+                    td.classList.add('request-off');
                 }
             }
-
-            // 年の場合は？要望は「公を入力するセル」なので、年については言及なし。
-            // 既存ロジックでは isRequest=true なら灰色。公も年も。
-            // ここではシンプルに「公」なら灰色をつけておく。
         }
 
         function showError(message) {
@@ -512,7 +544,7 @@
             errorSection.style.display = 'block';
         }
 
-        // ダウンロード（編集内容を反映してダウンロード）
+        // ダウンロード
         document.getElementById('downloadBtn').addEventListener('click', async () => {
             const table = document.querySelector('.preview-table');
             if (!table) return;
@@ -525,32 +557,23 @@
                 const day = tr.querySelector('.day-cell').textContent;
                 const dayOfWeek = tr.querySelector('.day-name-cell').textContent;
                 const staffData = {};
-
-                // スタッフのセルは2つずつ (3番目以降のtd)
                 const cells = Array.from(tr.querySelectorAll('.preview-cell'));
 
                 for (let i = 0; i < staffNames.length; i++) {
                     const yCell = cells[i * 2];
                     const valCell = cells[i * 2 + 1];
-
-                    const yVal = yCell.textContent.trim(); // 'Y' or ''
-                    const timeVal = valCell.textContent.trim(); // '9', '10', '公' etc
-
-                    // 結合してバックエンドに送る形式にする ('Y9', '10', '公' など)
+                    const timeVal = valCell.textContent.trim();
+                    const yVal = yCell.textContent.trim();
                     let fullVal = '';
+
                     if (timeVal === '公' || timeVal === '年') {
                         fullVal = timeVal;
                     } else {
-                        // 出勤
                         fullVal = yVal + timeVal;
                     }
 
-                    // isRequestの判定
-                    // originalRequestがtrueで、かつ値が公/年（つまり休み）の場合のみ維持
-                    // 出勤に変更したならrequestじゃない
                     const originalRequest = valCell.dataset.originalRequest === 'true';
                     let isRequest = originalRequest;
-
                     if (timeVal !== '公' && timeVal !== '年') {
                         isRequest = false;
                     }
@@ -568,7 +591,6 @@
                 });
             }
 
-            // サーバーに送信
             try {
                 const response = await fetch('/download_edited', {
                     method: 'POST',
@@ -577,6 +599,7 @@
                         rows: rows,
                         staffNames: staffNames,
                         filename: document.getElementById('resultSection').dataset.filename || 'schedule.xlsx'
+                        // memo: 削除
                     })
                 });
 
